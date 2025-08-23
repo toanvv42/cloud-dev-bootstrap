@@ -1,0 +1,155 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+packages:
+  - build-essential
+  - curl
+  - git
+  - ca-certificates
+  - pkg-config
+  - autoconf
+  - bison
+  - libssl-dev
+  - zlib1g-dev
+  - libreadline-dev
+  - libyaml-dev
+  - libsqlite3-dev
+  - sqlite3
+  - libxml2-dev
+  - libffi-dev
+  - libgdbm-dev
+  - libgmp-dev
+  - libncurses5-dev
+  - gnupg
+  - software-properties-common
+  - lsb-release
+  - wireguard
+  - wireguard-tools
+  - iproute2
+
+write_files:
+  - path: /usr/local/bin/install_rbenv_latest.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      USERNAME="${1:-ubuntu}"
+      HOME_DIR="$(getent passwd "$USERNAME" | cut -d: -f6)"
+      if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then
+        echo "Home directory for $USERNAME not found" >&2
+        exit 1
+      fi
+      run_as_user() {
+        su -l "$USERNAME" -c "bash -lc \"$*\""
+      }
+      run_as_user 'set -euo pipefail; if [ ! -d "$HOME/.rbenv" ]; then git clone https://github.com/rbenv/rbenv.git "$HOME/.rbenv"; else git -C "$HOME/.rbenv" pull --ff-only || true; fi'
+      run_as_user 'mkdir -p "$HOME/.rbenv/plugins"'
+      run_as_user 'if [ ! -d "$HOME/.rbenv/plugins/ruby-build" ]; then git clone https://github.com/rbenv/ruby-build.git "$HOME/.rbenv/plugins/ruby-build"; else git -C "$HOME/.rbenv/plugins/ruby-build" pull --ff-only || true; fi'
+      add_init='
+      marker_start="# >>> rbenv setup >>>"
+      marker_end="# <<< rbenv setup <<<"
+      add_file() {
+        f="$1"
+        [ -f "$f" ] || touch "$f"
+        if ! grep -q "$marker_start" "$f"; then
+          {
+            echo ""
+            echo "$marker_start"
+            echo "export PATH=\"$HOME/.rbenv/bin:\$PATH\""
+            echo "eval \"\$(rbenv init -)\""
+            echo "$marker_end"
+          } >> "$f"
+        fi
+      }
+      add_file "$HOME/.bashrc"
+      add_file "$HOME/.profile"
+      '
+      run_as_user "$add_init"
+      # load in this subshell and install latest Ruby
+      run_as_user 'export PATH="$HOME/.rbenv/bin:$PATH"; eval "$(rbenv init -)"; RUBY_VERSION="3.4.5"; export RUBY_CONFIGURE_OPTS="--disable-install-doc"; rbenv install -s "$RUBY_VERSION"; rbenv global "$RUBY_VERSION"; gem install bundler --no-document; rbenv rehash; rbenv doctor'
+
+  - path: /usr/local/bin/install_terraform.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec 1> >(logger -s -t $(basename $0)) 2>&1
+      
+      # Check available disk space (need at least 100MB)
+      available=$(df / | awk 'NR==2 {print $4}')
+      if [ "$available" -lt 102400 ]; then
+        echo "ERROR: Insufficient disk space for Terraform installation" >&2
+        exit 1
+      fi
+      
+      # Check network connectivity
+      if ! curl -s --connect-timeout 10 https://apt.releases.hashicorp.com/gpg >/dev/null; then
+        echo "ERROR: Cannot reach HashiCorp repository" >&2
+        exit 1
+      fi
+      
+      # HashiCorp apt repo for Terraform
+      if ! test -f /usr/share/keyrings/hashicorp-archive-keyring.gpg; then
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg >/dev/null
+        codename="$(lsb_release -cs)"
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $codename main" > /etc/apt/sources.list.d/hashicorp.list
+        apt-get update -y
+      fi
+      apt-get install -y terraform
+      
+      # Verify installation
+      if ! terraform version; then
+        echo "ERROR: Terraform installation failed" >&2
+        exit 1
+      fi
+      
+      # Cleanup
+      apt-get clean
+      echo "Terraform installed successfully."
+
+  - path: /usr/local/bin/install_tailscale.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec 1> >(logger -s -t $(basename $0)) 2>&1
+      
+      # Check network connectivity
+      if ! curl -s --connect-timeout 10 https://pkgs.tailscale.com >/dev/null; then
+        echo "ERROR: Cannot reach Tailscale repository" >&2
+        exit 1
+      fi
+      
+      # Add Tailscale apt repo and install
+      if ! test -f /usr/share/keyrings/tailscale-archive-keyring.gpg; then
+        codename="$(lsb_release -cs)"
+        curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${codename}.noarmor.gpg" \
+          | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+        curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${codename}.tailscale-keyring.list" \
+          | tee /etc/apt/sources.list.d/tailscale.list >/dev/null
+        apt-get update -y
+      fi
+      apt-get install -y tailscale
+      
+      # Start service and verify
+      if ! systemctl enable --now tailscaled; then
+        echo "ERROR: Failed to start tailscaled service" >&2
+        exit 1
+      fi
+      
+      # Cleanup
+      apt-get clean
+      echo "Tailscale installed successfully. Run 'sudo tailscale up' to connect."
+
+runcmd:
+  # Load WireGuard kernel module (packages already installed)
+  - ['modprobe', 'wireguard']
+  - ['timeout', '300', '/usr/local/bin/install_tailscale.sh']
+  - ['timeout', '300', '/usr/local/bin/install_terraform.sh']
+  - ['timeout', '1200', '/usr/local/bin/install_rbenv_latest.sh', 'ubuntu']
+
+final_message: |
+  cloud-init: Ruby (rbenv), Terraform, and WireGuard installation complete.
