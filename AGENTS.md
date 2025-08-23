@@ -1,38 +1,33 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root contains all assets for bootstrapping a dev machine:
-  - `cloud-init.yaml`: Cloud-Init user-data to provision a fresh VM.
-  - `install_rbenv.sh`: Installs rbenv and Ruby toolchain.
-  - `install_terraform_wireguard.sh`: Installs Terraform and WireGuard tooling.
-- Keep new provisioning scripts in the repository root (or create `scripts/` if volume grows). Name files with lowercase snake_case.
+- Root config: `cloud-init.yaml` — provisions packages and writes helper scripts via `write_files`, then runs them in order using `runcmd`.
+- Generated scripts (on the VM): `/usr/local/bin/install_*.sh` — Ruby (rbenv), Terraform, Tailscale, Node/NVM and CLIs.
+- Meta folders: `.git/` (history), `.claude/` (editor/AI settings). No app source code in this repo.
 
 ## Build, Test, and Development Commands
-- Validate Cloud‑Init: `cloud-init schema --config-file cloud-init.yaml` (checks syntax/schema).
-- Try Cloud‑Init locally: `multipass launch --cloud-init cloud-init.yaml` (spins a test VM).
-- Run scripts directly:
-  - `bash install_rbenv.sh`
-  - `bash install_terraform_wireguard.sh`
-- Lint and format:
-  - `shellcheck *.sh` (static analysis for Bash)
-  - `shfmt -w *.sh` (format Bash)
-  - `yamllint cloud-init.yaml` (validate YAML style)
+- Validate YAML: `yamllint cloud-init.yaml` — catch indentation/syntax issues.
+- Quick diff check: `git diff --word-diff cloud-init.yaml` — verify minimal changes.
+- Local VM test (Multipass): `multipass launch jammy --name ci-test --cloud-init cloud-init.yaml`
+  - Verify on VM: `multipass exec ci-test -- bash -lc 'ruby -v; node -v; terraform version; systemctl is-active tailscaled'`
+- Oracle Cloud: paste the full `cloud-init.yaml` into the “User data” field when creating the instance.
 
 ## Coding Style & Naming Conventions
-- Bash: `#!/usr/bin/env bash` at top, `set -euo pipefail`, 2‑space indentation, functions over inline blocks, constants in UPPER_SNAKE_CASE, variables in lower_snake_case.
-- YAML: 2‑space indentation, hyphenated keys where idiomatic to Cloud‑Init, keep logical section order (users, packages, write_files, runcmd).
-- Filenames: lowercase snake_case; scripts must be executable (`chmod +x`).
+- YAML: 2‑space indent, no tabs; group related keys; keep comments short and actionable.
+- Shell (embedded in `write_files`): use `#!/usr/bin/env bash` and `set -euo pipefail`; prefer functions; quote variables; avoid sudo inside scripts (they run as root); name installers `install_<tool>.sh`.
+- Commands: prefer idempotent operations; use `apt-get` with `-y`; check connectivity before remote fetches.
 
 ## Testing Guidelines
-- Static checks: run `shellcheck` and `yamllint` on every change.
-- Safety: scripts should be idempotent and re‑runnable; guard with existence checks (e.g., `command -v terraform >/dev/null || ...`).
-- Functional test: provision a disposable VM with the Cloud‑Init file and verify expected packages, users, and services.
+- Lint scripts: extract changed script blocks and run `shellcheck -s bash`.
+- Dry run: launch an ephemeral VM (Multipass or cloud provider) and confirm tool versions and active services as above.
+- Rollback safety: keep changes additive and reversible; avoid removing working installers without discussion.
 
 ## Commit & Pull Request Guidelines
-- Commits: use Conventional Commits (e.g., `feat: add wireguard install step`, `fix: pin terraform version`).
-- PRs must include: concise description, rationale, test notes (commands run, outputs), and any security implications. Link related issues.
-- Screenshots or logs: include `cloud-init status --long` or script output snippets when relevant.
+- Commits: follow Conventional Commits (`feat:`, `fix:`, `chore:`) as seen in history.
+- PRs must include: purpose, high‑level changes, risk/impact, manual test plan (commands/output), and any follow‑ups.
+- Screenshots or logs: include `systemctl status tailscaled` and tool `--version` outputs for validation.
+- Checklist: YAML lints clean, scripts pass `shellcheck`, VM test succeeds, no secrets embedded.
 
 ## Security & Configuration Tips
-- Never commit secrets or private keys. Use environment variables or separate, ignored files (e.g., `.env.local`).
-- Prefer pinned versions and checksums for downloads. Require `sudo` only when necessary and verify `EUID` before privileged actions.
+- Do not hardcode tokens; run `tailscale up` interactively post‑provision.
+- Keep versions pinned where stability matters; prefer HTTPS and GPG‑verified repos.
