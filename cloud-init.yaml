@@ -6,6 +6,7 @@ packages:
   - curl
   - git
   - ca-certificates
+  - xz-utils
   - pkg-config
   - autoconf
   - bison
@@ -144,12 +145,72 @@ write_files:
       apt-get clean
       echo "Tailscale installed successfully. Run 'sudo tailscale up' to connect."
 
+  - path: /usr/local/bin/install_node_and_clis.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Install Node.js (via nvm) and user-local CLIs without sudo.
+      set -euo pipefail
+      exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+      USERNAME="${1:-ubuntu}"
+      HOME_DIR="$(getent passwd "$USERNAME" | cut -d: -f6)"
+      if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then
+        echo "Home directory for $USERNAME not found" >&2
+        exit 1
+      fi
+
+      run_as_user() {
+        su -l "$USERNAME" -c "bash -lc \"$*\""
+      }
+
+      # Ensure ~/.local/bin is on PATH for the user
+      add_path_snippet='\n# >>> user-local npm bin >>>\nexport PATH="$HOME/.local/bin:$PATH"\n# <<< user-local npm bin <<<\n'
+      for f in "$HOME_DIR/.bashrc" "$HOME_DIR/.profile"; do
+        [ -f "$f" ] || touch "$f"
+        if ! grep -q "user-local npm bin" "$f"; then
+          printf "%b" "$add_path_snippet" >> "$f"
+          chown "$USERNAME:$USERNAME" "$f"
+        fi
+      done
+
+      # Install nvm for the user if missing (pinned version)
+      NVM_DIR="$HOME_DIR/.nvm"
+      if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        run_as_user 'export PROFILE="$HOME/.bashrc"; curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash'
+      fi
+
+      # Install Node LTS and set default
+      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; nvm install --lts; nvm alias default "lts/*"; node -v; npm -v'
+
+      # Configure npm to install to user prefix (no sudo)
+      run_as_user 'mkdir -p "$HOME/.local"; npm config set prefix "$HOME/.local"'
+
+      # Helper: install package if it exists on npm
+      install_pkg_if_exists() {
+        local pkg="$1"
+        if run_as_user "npm view ${pkg} version >/dev/null 2>&1"; then
+          echo "Installing npm package: $pkg"
+          run_as_user "npm install -g ${pkg}"
+        else
+          echo "WARNING: npm package not found: $pkg (skipping)" >&2
+        fi
+      }
+
+      # Target CLIs (adjust names if your project uses different packages)
+      install_pkg_if_exists "@anthropic-ai/claude-code"
+      install_pkg_if_exists "@openai/codex"
+
+      echo "Node.js and requested CLIs setup complete for $USERNAME."
+
 runcmd:
   # Load WireGuard kernel module (packages already installed)
   - ['modprobe', 'wireguard']
   - ['timeout', '300', '/usr/local/bin/install_tailscale.sh']
   - ['timeout', '300', '/usr/local/bin/install_terraform.sh']
   - ['timeout', '1200', '/usr/local/bin/install_rbenv_latest.sh', 'ubuntu']
+  - ['timeout', '1800', '/usr/local/bin/install_node_and_clis.sh', 'ubuntu']
 
 final_message: |
   cloud-init: Ruby (rbenv), Terraform, and WireGuard installation complete.
