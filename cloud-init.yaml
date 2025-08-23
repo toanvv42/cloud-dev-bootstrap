@@ -1,4 +1,7 @@
 #cloud-config
+# Note: For Oracle Cloud, use this file content as "user data" when creating the instance
+# Make sure to paste the entire file content in the user data field during VM creation
+
 package_update: true
 package_upgrade: false
 packages:
@@ -20,7 +23,7 @@ packages:
   - libffi-dev
   - libgdbm-dev
   - libgmp-dev
-  - libncurses5-dev
+  - libncurses-dev
   - gnupg
   - software-properties-common
   - lsb-release
@@ -47,26 +50,11 @@ write_files:
       run_as_user 'set -euo pipefail; if [ ! -d "$HOME/.rbenv" ]; then git clone https://github.com/rbenv/rbenv.git "$HOME/.rbenv"; else git -C "$HOME/.rbenv" pull --ff-only || true; fi'
       run_as_user 'mkdir -p "$HOME/.rbenv/plugins"'
       run_as_user 'if [ ! -d "$HOME/.rbenv/plugins/ruby-build" ]; then git clone https://github.com/rbenv/ruby-build.git "$HOME/.rbenv/plugins/ruby-build"; else git -C "$HOME/.rbenv/plugins/ruby-build" pull --ff-only || true; fi'
-      add_init='
-      marker_start="# >>> rbenv setup >>>"
-      marker_end="# <<< rbenv setup <<<"
-      add_file() {
-        f="$1"
-        [ -f "$f" ] || touch "$f"
-        if ! grep -q "$marker_start" "$f"; then
-          {
-            echo ""
-            echo "$marker_start"
-            echo "export PATH=\"$HOME/.rbenv/bin:\$PATH\""
-            echo "eval \"\$(rbenv init -)\""
-            echo "$marker_end"
-          } >> "$f"
-        fi
-      }
-      add_file "$HOME/.bashrc"
-      add_file "$HOME/.profile"
-      '
-      run_as_user "$add_init"
+      # Add rbenv to shell profiles
+      run_as_user 'echo "export PATH=\"\$HOME/.rbenv/bin:\$PATH\"" >> "$HOME/.bashrc"'
+      run_as_user 'echo "eval \"\$(rbenv init -)\"" >> "$HOME/.bashrc"'
+      run_as_user 'echo "export PATH=\"\$HOME/.rbenv/bin:\$PATH\"" >> "$HOME/.profile"'
+      run_as_user 'echo "eval \"\$(rbenv init -)\"" >> "$HOME/.profile"'
       # load in this subshell and install latest Ruby
       run_as_user 'export PATH="$HOME/.rbenv/bin:$PATH"; eval "$(rbenv init -)"; RUBY_VERSION="3.4.5"; export RUBY_CONFIGURE_OPTS="--disable-install-doc"; rbenv install -s "$RUBY_VERSION"; rbenv global "$RUBY_VERSION"; gem install bundler --no-document; rbenv rehash; rbenv doctor'
 
@@ -166,14 +154,7 @@ write_files:
       }
 
       # Ensure ~/.local/bin is on PATH for the user
-      add_path_snippet='\n# >>> user-local npm bin >>>\nexport PATH="$HOME/.local/bin:$PATH"\n# <<< user-local npm bin <<<\n'
-      for f in "$HOME_DIR/.bashrc" "$HOME_DIR/.profile"; do
-        [ -f "$f" ] || touch "$f"
-        if ! grep -q "user-local npm bin" "$f"; then
-          printf "%b" "$add_path_snippet" >> "$f"
-          chown "$USERNAME:$USERNAME" "$f"
-        fi
-      done
+      run_as_user 'echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"'
 
       # Install nvm for the user if missing (pinned version)
       NVM_DIR="$HOME_DIR/.nvm"
@@ -182,25 +163,16 @@ write_files:
       fi
 
       # Install Node LTS and set default
-      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; nvm install --lts; nvm alias default "lts/*"; node -v; npm -v'
+      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; nvm install --lts; nvm alias default "lts/*"; node -v; npm -v'
 
-      # Configure npm to install to user prefix (no sudo)
-      run_as_user 'mkdir -p "$HOME/.local"; npm config set prefix "$HOME/.local"'
+      # Configure npm and add nvm to profiles  
+      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; mkdir -p "$HOME/.local"'
+      run_as_user 'echo "export NVM_DIR=\"\$HOME/.nvm\"" >> "$HOME/.bashrc"'
+      run_as_user 'echo "[ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"" >> "$HOME/.bashrc"'
+      run_as_user 'echo "[ -s \"\$NVM_DIR/bash_completion\" ] && source \"\$NVM_DIR/bash_completion\"" >> "$HOME/.bashrc"'
 
-      # Helper: install package if it exists on npm
-      install_pkg_if_exists() {
-        local pkg="$1"
-        if run_as_user "npm view ${pkg} version >/dev/null 2>&1"; then
-          echo "Installing npm package: $pkg"
-          run_as_user "npm install -g ${pkg}"
-        else
-          echo "WARNING: npm package not found: $pkg (skipping)" >&2
-        fi
-      }
-
-      # Target CLIs (adjust names if your project uses different packages)
-      install_pkg_if_exists "@anthropic-ai/claude-code"
-      install_pkg_if_exists "@openai/codex"
+      # Install Claude Code CLI
+      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; npm install -g @anthropic-ai/claude-code'
 
       echo "Node.js and requested CLIs setup complete for $USERNAME."
 
