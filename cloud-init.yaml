@@ -238,6 +238,71 @@ write_files:
       rm -f "/tmp/nvim-linux-${NVIM_ARCH}.tar.gz"
       echo "Neovim and AstroNvim installation complete for $USERNAME."
 
+  - path: /usr/local/bin/install_nerd_fonts.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Install Nerd Fonts required by AstroNvim (JetBrainsMono + Symbols)
+      # Notes:
+      # - Fonts must be used by your terminal emulator. After install, set your
+      #   terminal font to "JetBrainsMono Nerd Font" (or the Mono variant).
+      # - When connecting over SSH, icons render using your local terminal's
+      #   font. Installing on the server helps for GUI apps on the server only.
+      set -euo pipefail
+      exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+      VERSION="${NERD_FONTS_VERSION:-v3.2.1}"
+      FONTS_DIR="/usr/local/share/fonts/nerd-fonts"
+
+      ensure_tools() {
+        apt-get update -y
+        apt-get install -y fontconfig unzip
+      }
+
+      has_font() {
+        local query="$1"
+        fc-list | grep -qi -- "$query"
+      }
+
+      net_ok() {
+        curl -s --connect-timeout 10 https://github.com/ryanoasis/nerd-fonts >/dev/null
+      }
+
+      install_font() {
+        local asset="$1"   # e.g., JetBrainsMono or NerdFontsSymbolsOnly
+        local name="$2"    # human name to check via fc-list
+        if has_font "$name"; then
+          echo "Skipping $name (already installed)"
+          return 0
+        fi
+        echo "Installing $name from Nerd Fonts $VERSION..."
+        mkdir -p "$FONTS_DIR/$asset"
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+        cd "$tmpdir"
+        curl -fsSLo "$asset.zip" "https://github.com/ryanoasis/nerd-fonts/releases/download/${VERSION}/${asset}.zip"
+        unzip -q -o "$asset.zip" -d "$asset"
+        # Copy only TTF files to the fonts directory
+        find "$asset" -type f -iname '*.ttf' -exec install -m 0644 -t "$FONTS_DIR/$asset" {} +
+      }
+
+      main() {
+        if ! net_ok; then
+          echo "ERROR: Network check failed (cannot reach GitHub)." >&2
+          exit 1
+        fi
+        ensure_tools
+        install_font "JetBrainsMono" "JetBrainsMono Nerd Font"
+        # Symbols-only font as a fallback for terminals that support fallbacks
+        install_font "NerdFontsSymbolsOnly" "Symbols Nerd Font"
+        echo "Refreshing font cache..."
+        fc-cache -f
+        echo "Nerd Fonts installation complete. Set your terminal to 'JetBrainsMono Nerd Font'."
+      }
+
+      main "$@"
+
   - path: /usr/local/bin/install_fzf_lazygit.sh
     permissions: '0755'
     owner: root:root
@@ -318,6 +383,7 @@ runcmd:
   - ['timeout', '1200', '/usr/local/bin/install_rbenv_latest.sh', 'ubuntu']
   - ['timeout', '1800', '/usr/local/bin/install_node_and_clis.sh', 'ubuntu']
   - ['timeout', '600', '/usr/local/bin/install_neovim_astronvim.sh', 'ubuntu']
+  - ['timeout', '300', '/usr/local/bin/install_nerd_fonts.sh']
   - ['timeout', '600', '/usr/local/bin/install_fzf_lazygit.sh', 'ubuntu']
 
 final_message: |
