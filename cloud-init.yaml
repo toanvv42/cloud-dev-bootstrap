@@ -176,6 +176,140 @@ write_files:
 
       echo "Node.js and requested CLIs setup complete for $USERNAME."
 
+  - path: /usr/local/bin/install_neovim_astronvim.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Install latest Neovim and AstroNvim configuration
+      set -euo pipefail
+      exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+      USERNAME="${1:-ubuntu}"
+      HOME_DIR="$(getent passwd "$USERNAME" | cut -d: -f6)"
+      if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then
+        echo "Home directory for $USERNAME not found" >&2
+        exit 1
+      fi
+
+      run_as_user() {
+        su -l "$USERNAME" -c "bash -lc \"$*\""
+      }
+
+      # Check network connectivity
+      if ! curl -s --connect-timeout 10 https://github.com/neovim/neovim/releases >/dev/null; then
+        echo "ERROR: Cannot reach GitHub releases" >&2
+        exit 1
+      fi
+
+      # Detect architecture
+      ARCH=$(uname -m)
+      case $ARCH in
+        x86_64) NVIM_ARCH="x86_64" ;;
+        aarch64|arm64) NVIM_ARCH="arm64" ;;
+        *) echo "ERROR: Unsupported architecture: $ARCH" >&2; exit 1 ;;
+      esac
+
+      # Download and install latest Neovim
+      echo "Installing Neovim for $NVIM_ARCH architecture..."
+      cd /tmp
+      curl -LO "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz"
+      
+      # Remove old installation and extract new one
+      rm -rf /opt/nvim*
+      tar -C /opt -xzf "nvim-linux-${NVIM_ARCH}.tar.gz"
+      
+      # Create global symlink
+      ln -sf "/opt/nvim-linux-${NVIM_ARCH}/bin/nvim" /usr/local/bin/nvim
+      
+      # Verify installation
+      if ! /usr/local/bin/nvim --version; then
+        echo "ERROR: Neovim installation failed" >&2
+        exit 1
+      fi
+
+      # Install AstroNvim configuration for the user
+      echo "Installing AstroNvim configuration for $USERNAME..."
+      run_as_user 'rm -rf "$HOME/.config/nvim"'
+      run_as_user 'git clone --depth 1 https://github.com/AstroNvim/template "$HOME/.config/nvim"'
+      run_as_user 'rm -rf "$HOME/.config/nvim/.git"'
+
+      # Cleanup
+      rm -f "/tmp/nvim-linux-${NVIM_ARCH}.tar.gz"
+      echo "Neovim and AstroNvim installation complete for $USERNAME."
+
+  - path: /usr/local/bin/install_fzf_lazygit.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Install fzf and lazygit
+      set -euo pipefail
+      exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+      USERNAME="${1:-ubuntu}"
+      HOME_DIR="$(getent passwd "$USERNAME" | cut -d: -f6)"
+      if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then
+        echo "Home directory for $USERNAME not found" >&2
+        exit 1
+      fi
+
+      run_as_user() {
+        su -l "$USERNAME" -c "bash -lc \"$*\""
+      }
+
+      # Check network connectivity
+      if ! curl -s --connect-timeout 10 https://github.com >/dev/null; then
+        echo "ERROR: Cannot reach GitHub" >&2
+        exit 1
+      fi
+
+      # Install fzf
+      echo "Installing fzf for $USERNAME..."
+      run_as_user 'rm -rf "$HOME/.fzf"'
+      run_as_user 'git clone --depth 1 https://github.com/junegunn/fzf.git "$HOME/.fzf"'
+      run_as_user '"$HOME/.fzf/install" --all --no-bash --no-zsh --no-fish'
+      
+      # Add fzf to bashrc manually since we disabled auto-setup
+      run_as_user 'echo "# fzf setup" >> "$HOME/.bashrc"'
+      run_as_user 'echo "export PATH=\"\$HOME/.fzf/bin:\$PATH\"" >> "$HOME/.bashrc"'
+      run_as_user 'echo "[ -f ~/.fzf.bash ] && source ~/.fzf.bash" >> "$HOME/.bashrc"'
+
+      # Install lazygit
+      echo "Installing lazygit..."
+      cd /tmp
+      
+      # Detect architecture
+      ARCH=$(uname -m)
+      case $ARCH in
+        x86_64) LAZYGIT_ARCH="x86_64" ;;
+        aarch64|arm64) LAZYGIT_ARCH="arm64" ;;
+        *) echo "ERROR: Unsupported architecture: $ARCH" >&2; exit 1 ;;
+      esac
+
+      # Get latest version and download
+      LAZYGIT_VERSION=$(curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | grep -Po '"tag_name": "v\K[^"]*' || echo "0.54.2")
+      curl -Lo lazygit.tar.gz "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${LAZYGIT_VERSION}_Linux_${LAZYGIT_ARCH}.tar.gz"
+      
+      # Extract and install
+      tar xf lazygit.tar.gz
+      install lazygit /usr/local/bin/
+      
+      # Verify installations
+      if ! /usr/local/bin/lazygit --version; then
+        echo "ERROR: lazygit installation failed" >&2
+        exit 1
+      fi
+      
+      if ! run_as_user '"$HOME/.fzf/bin/fzf" --version'; then
+        echo "ERROR: fzf installation failed" >&2
+        exit 1
+      fi
+
+      # Cleanup
+      rm -f /tmp/lazygit.tar.gz /tmp/lazygit
+      echo "fzf and lazygit installation complete for $USERNAME."
+
 runcmd:
   # Load WireGuard kernel module (packages already installed)
   - ['modprobe', 'wireguard']
@@ -183,6 +317,8 @@ runcmd:
   - ['timeout', '300', '/usr/local/bin/install_terraform.sh']
   - ['timeout', '1200', '/usr/local/bin/install_rbenv_latest.sh', 'ubuntu']
   - ['timeout', '1800', '/usr/local/bin/install_node_and_clis.sh', 'ubuntu']
+  - ['timeout', '600', '/usr/local/bin/install_neovim_astronvim.sh', 'ubuntu']
+  - ['timeout', '600', '/usr/local/bin/install_fzf_lazygit.sh', 'ubuntu']
 
 final_message: |
   cloud-init: Ruby (rbenv), Terraform, and WireGuard installation complete.
