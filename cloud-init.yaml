@@ -156,14 +156,20 @@ write_files:
       # Ensure ~/.local/bin is on PATH for the user
       run_as_user 'echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"'
 
-      # Install nvm for the user if missing (pinned version)
+      # Install nvm for the user if missing (pinned version with checksum verification)
       NVM_DIR="$HOME_DIR/.nvm"
       if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-        run_as_user 'export PROFILE="$HOME/.bashrc"; curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash'
+        NVM_VERSION="v0.39.7"
+        NVM_URL="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
+        NVM_SHASUMS="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/SHASUMS256.txt"
+        curl -fsSL --connect-timeout 10 "$NVM_URL" -o /tmp/install_nvm.sh
+        curl -fsSL --connect-timeout 10 "$NVM_SHASUMS" | grep "install.sh" | awk '{print $1 "  /tmp/install_nvm.sh"}' | sha256sum -c -
+        run_as_user 'export PROFILE=$HOME/.bashrc; bash /tmp/install_nvm.sh'
+        rm /tmp/install_nvm.sh
       fi
 
       # Install Node LTS and set default
-      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; nvm install --lts; nvm alias default "lts/*"; node -v; npm -v'
+      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; nvm install --lts=hydrogen; nvm alias default "lts/hydrogen"; node -v; npm -v'
 
       # Configure npm and add nvm to profiles  
       run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; mkdir -p "$HOME/.local"'
@@ -172,7 +178,7 @@ write_files:
       run_as_user 'echo "[ -s \"\$NVM_DIR/bash_completion\" ] && source \"\$NVM_DIR/bash_completion\"" >> "$HOME/.bashrc"'
 
       # Install Claude Code CLI
-      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; npm install -g @anthropic-ai/claude-code'
+      run_as_user 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"; npm install -g @anthropic-ai/claude-code@0.3.2'
 
       echo "Node.js and requested CLIs setup complete for $USERNAME."
 
